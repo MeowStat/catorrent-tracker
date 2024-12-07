@@ -3,6 +3,9 @@ from flask import Flask, request, jsonify
 import hashlib
 import random
 import time
+import os
+import psycopg2
+from psycopg2 import sql
 
 app = Flask(__name__)
 
@@ -17,7 +20,16 @@ peer_db = {}
 # def generate_info_hash():
 #     return hashlib.sha1(str(time.time()).encode('utf-8')).hexdigest()
 
-# Initialize SQLite Database
+# AWS RDS connection function
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.getenv('DB_HOST'),       # RDS Endpoint
+        database=os.getenv('DB_NAME'),   # Database Name
+        user=os.getenv('DB_USER'),       # Database Username
+        password=os.getenv('DB_PASSWORD'),  # Database Password
+        port=os.getenv('DB_PORT', '5432')    # Port, default 5432 for PostgreSQL
+    )
+
 def init_db():
     conn = sqlite3.connect('tracker.db')
     c = conn.cursor()
@@ -33,15 +45,22 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Insert or update peer in the database
 def upsert_peer(info_hash, peer_id, ip, port, downloaded, left):
-    conn = sqlite3.connect('tracker.db')
-    c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO peers (info_hash, peer_id, ip, port, downloaded, left, last_seen)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
-              (info_hash, peer_id, ip, port, downloaded, left, time.time()))
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute('''
+            INSERT INTO peers (info_hash, peer_id, ip, port, downloaded, left, last_seen)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (info_hash, peer_id) DO UPDATE
+            SET ip = EXCLUDED.ip,
+                port = EXCLUDED.port,
+                downloaded = EXCLUDED.downloaded,
+                left = EXCLUDED.left,
+                last_seen = EXCLUDED.last_seen
+        ''', (info_hash, peer_id, ip, port, downloaded, left, time.time()))
     conn.commit()
     conn.close()
+
 
 # Get peer list for a specific torrent (info_hash)
 def get_peer_list(info_hash):
